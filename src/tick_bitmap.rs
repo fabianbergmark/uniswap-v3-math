@@ -115,7 +115,7 @@ pub async fn next_initialized_tick_within_one_word_from_provider<P: Provider>(
                 .call()
                 .await
             {
-                Ok(word) => U256::from(word._0),
+                Ok(word) => U256::from(word),
                 Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
             }
         } else {
@@ -124,7 +124,7 @@ pub async fn next_initialized_tick_within_one_word_from_provider<P: Provider>(
                 .call()
                 .await
             {
-                Ok(word) => U256::from(word._0),
+                Ok(word) => U256::from(word),
                 Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
             }
         };
@@ -155,7 +155,7 @@ pub async fn next_initialized_tick_within_one_word_from_provider<P: Provider>(
                 .call()
                 .await
             {
-                Ok(word) => U256::from(word._0),
+                Ok(word) => U256::from(word),
                 Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
             }
         } else {
@@ -164,7 +164,7 @@ pub async fn next_initialized_tick_within_one_word_from_provider<P: Provider>(
                 .call()
                 .await
             {
-                Ok(word) => U256::from(word._0),
+                Ok(word) => U256::from(word),
                 Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
             }
         };
