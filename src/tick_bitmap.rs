@@ -1,9 +1,10 @@
 use crate::U256_1;
 use crate::{bit_math, error::UniswapV3MathError};
+use alloy::primitives::map::HashMap;
 use alloy::primitives::{Address, BlockNumber, U256};
 use alloy::providers::Provider;
 use alloy::sol;
-use std::{collections::HashMap, sync::Arc};
+use std::sync::Arc;
 
 sol! {
     #[sol(rpc)]
