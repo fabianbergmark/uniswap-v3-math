@@ -1,10 +1,10 @@
 use crate::U256_1;
 use crate::{bit_math, error::UniswapV3MathError};
 use alloy::primitives::map::HashMap;
-use alloy::primitives::{Address, BlockNumber, U256};
-use alloy::providers::Provider;
+use alloy::primitives::{keccak256, U256};
 use alloy::sol;
-use std::sync::Arc;
+use alloy::sol_types::SolValue;
+use serde::{Deserialize, Serialize};
 
 sol! {
     #[sol(rpc)]
@@ -13,178 +13,85 @@ sol! {
     }
 }
 
-//Flips the initialized state for a given tick from false to true, or vice versa
-pub fn flip_tick(
-    tick_bitmap: &mut HashMap<i16, U256>,
-    tick: i32,
-    tick_spacing: i32,
-) -> Result<(), UniswapV3MathError> {
-    if (tick % tick_spacing) != 0 {
-        return Err(UniswapV3MathError::TickSpacingError);
+#[derive(Debug, Default, Clone, Serialize, Deserialize)]
+pub struct TickBitmap(pub HashMap<U256, U256>);
+
+impl TickBitmap {
+    pub fn read_raw(&self, slot: U256) -> Option<U256> {
+        self.0.get(&slot).cloned()
     }
 
-    let (word_pos, bit_pos) = position(tick / tick_spacing);
-    let mask = U256_1 << bit_pos;
-    let word = *tick_bitmap.get(&word_pos).unwrap_or(&U256::ZERO);
-    tick_bitmap.insert(word_pos, word ^ mask);
-    Ok(())
-}
-
-//Returns the next initialized tick contained in the same word (or adjacent word) as the tick that is either
-//to the left (less than or equal to) or right (greater than) of the given tick
-pub fn next_initialized_tick_within_one_word(
-    tick_bitmap: &HashMap<i16, U256>,
-    tick: i32,
-    tick_spacing: i32,
-    lte: bool,
-) -> Result<(i32, bool), UniswapV3MathError> {
-    let compressed = if tick < 0 && tick % tick_spacing != 0 {
-        (tick / tick_spacing) - 1
-    } else {
-        tick / tick_spacing
-    };
-
-    if lte {
-        let (word_pos, bit_pos) = position(compressed);
-
-        let mask = (U256_1 << bit_pos) - U256_1 + (U256_1 << bit_pos);
-
-        let masked = *tick_bitmap.get(&word_pos).unwrap_or(&U256::ZERO) & mask;
-
-        let initialized = !masked.is_zero();
-
-        let next = if initialized {
-            (compressed
-                - (bit_pos
-                    .overflowing_sub(bit_math::most_significant_bit(masked)?)
-                    .0) as i32)
-                * tick_spacing
-        } else {
-            (compressed - bit_pos as i32) * tick_spacing
-        };
-
-        Ok((next, initialized))
-    } else {
-        let (word_pos, bit_pos) = position(compressed + 1);
-
-        let mask = !((U256_1 << bit_pos) - U256_1);
-
-        let masked = *tick_bitmap.get(&word_pos).unwrap_or(&U256::ZERO) & mask;
-
-        let initialized = !masked.is_zero();
-
-        let next = if initialized {
-            (compressed
-                + 1
-                + (bit_math::least_significant_bit(masked)?
-                    .overflowing_sub(bit_pos)
-                    .0) as i32)
-                * tick_spacing
-        } else {
-            (compressed + 1 + ((0xFF - bit_pos) as i32)) * tick_spacing
-        };
-
-        Ok((next, initialized))
+    //Flips the initialized state for a given tick from false to true, or vice versa
+    pub fn flip_tick(&mut self, tick: i32, tick_spacing: i32) -> Result<(), UniswapV3MathError> {
+        if (tick % tick_spacing) != 0 {
+            return Err(UniswapV3MathError::TickSpacingError);
+        }
+        let (word_pos, bit_pos) = position(tick / tick_spacing);
+        let mask = U256_1 << bit_pos;
+        let slot = keccak256((word_pos, U256::from(6)).abi_encode());
+        let slot: U256 = slot.into();
+        *self.0.entry(slot).or_default() ^= mask;
+        Ok(())
     }
-}
 
-//Returns next and initialized. This function calls the node to get the word at the word_pos.
-//current_word is the current word in the TickBitmap of the pool based on `tick`. TickBitmap[word_pos] = current_word
-//Where word_pos is the 256 bit offset of the ticks word_pos.. word_pos := tick >> 8
-pub async fn next_initialized_tick_within_one_word_from_provider<P: Provider>(
-    tick: i32,
-    tick_spacing: i32,
-    lte: bool,
-    pool_address: Address,
-    block_number: Option<BlockNumber>,
-    provider: Arc<P>,
-) -> Result<(i32, bool), UniswapV3MathError> {
-    let compressed = if tick < 0 && tick % tick_spacing != 0 {
-        (tick / tick_spacing) - 1
-    } else {
-        tick / tick_spacing
-    };
-
-    if lte {
-        let (word_pos, bit_pos) = position(compressed);
-        let mask = (U256_1 << bit_pos) - U256_1 + (U256_1 << bit_pos);
-
-        let word = if let Some(block_number) = block_number {
-            match IUniswapV3Pool::new(pool_address, provider)
-                .tick_bitmap(word_pos)
-                .block(block_number.into())
-                .call()
-                .await
-            {
-                Ok(word) => U256::from(word),
-                Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
-            }
+    //Returns the next initialized tick contained in the same word (or adjacent word) as the tick that is either
+    //to the left (less than or equal to) or right (greater than) of the given tick
+    pub fn next_initialized_tick_within_one_word(
+        &self,
+        tick: i32,
+        tick_spacing: i32,
+        lte: bool,
+    ) -> Result<(i32, bool), UniswapV3MathError> {
+        let compressed = if tick < 0 && tick % tick_spacing != 0 {
+            (tick / tick_spacing) - 1
         } else {
-            match IUniswapV3Pool::new(pool_address, provider)
-                .tick_bitmap(word_pos)
-                .call()
-                .await
-            {
-                Ok(word) => U256::from(word),
-                Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
-            }
+            tick / tick_spacing
         };
 
-        let masked = word & mask;
+        if lte {
+            let (word_pos, bit_pos) = position(compressed);
+            let slot = keccak256((word_pos, U256::from(6)).abi_encode());
+            let slot: U256 = slot.into();
+            let mask = (U256_1 << bit_pos) - U256_1 + (U256_1 << bit_pos);
 
-        let initialized = !masked.is_zero();
+            let masked = self.0.get(&slot).unwrap_or(&U256::ZERO) & mask;
 
-        let next = if initialized {
-            (compressed
-                - (bit_pos
-                    .overflowing_sub(bit_math::most_significant_bit(masked)?)
-                    .0) as i32)
-                * tick_spacing
+            let initialized = !masked.is_zero();
+
+            let next = if initialized {
+                (compressed
+                    - (bit_pos
+                        .overflowing_sub(bit_math::most_significant_bit(masked)?)
+                        .0) as i32)
+                    * tick_spacing
+            } else {
+                (compressed - bit_pos as i32) * tick_spacing
+            };
+
+            Ok((next, initialized))
         } else {
-            (compressed - bit_pos as i32) * tick_spacing
-        };
+            let (word_pos, bit_pos) = position(compressed + 1);
+            let slot = keccak256((word_pos, U256::from(6)).abi_encode());
+            let slot: U256 = slot.into();
+            let mask = !((U256_1 << bit_pos) - U256_1);
 
-        Ok((next, initialized))
-    } else {
-        let (word_pos, bit_pos) = position(compressed + 1);
-        let mask = !((U256_1 << bit_pos) - U256_1);
+            let masked = self.0.get(&slot).unwrap_or(&U256::ZERO) & mask;
 
-        let word = if let Some(block_number) = block_number {
-            match IUniswapV3Pool::new(pool_address, provider)
-                .tick_bitmap(word_pos)
-                .block(block_number.into())
-                .call()
-                .await
-            {
-                Ok(word) => U256::from(word),
-                Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
-            }
-        } else {
-            match IUniswapV3Pool::new(pool_address, provider)
-                .tick_bitmap(word_pos)
-                .call()
-                .await
-            {
-                Ok(word) => U256::from(word),
-                Err(err) => return Err(UniswapV3MathError::MiddlewareError(err.to_string())),
-            }
-        };
+            let initialized = !masked.is_zero();
 
-        let masked = word & mask;
-        let initialized = !masked.is_zero();
+            let next = if initialized {
+                (compressed
+                    + 1
+                    + (bit_math::least_significant_bit(masked)?
+                        .overflowing_sub(bit_pos)
+                        .0) as i32)
+                    * tick_spacing
+            } else {
+                (compressed + 1 + ((0xFF - bit_pos) as i32)) * tick_spacing
+            };
 
-        let next = if initialized {
-            (compressed
-                + 1
-                + (bit_math::least_significant_bit(masked)?
-                    .overflowing_sub(bit_pos)
-                    .0) as i32)
-                * tick_spacing
-        } else {
-            (compressed + 1 + ((0xFF - bit_pos) as i32)) * tick_spacing
-        };
-
-        Ok((next, initialized))
+            Ok((next, initialized))
+        }
     }
 }
 

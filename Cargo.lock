@@ -3366,6 +3366,7 @@ version = "0.5.1"
 dependencies = [
  "alloy",
  "eyre",
+ "serde",
  "thiserror 1.0.61",
 ]
 
